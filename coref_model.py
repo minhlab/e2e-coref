@@ -24,18 +24,18 @@ class CorefModel(object):
     self.eval_data = None # Load eval data lazily.
 
     input_props = []
-    input_props.append((tf.float32, [None, None, self.embedding_size])) # Text embeddings.
-    input_props.append((tf.int32, [None, None, None])) # Character indices.
-    input_props.append((tf.int32, [None])) # Text lengths.
-    input_props.append((tf.int32, [None])) # Speaker IDs.
-    input_props.append((tf.int32, [])) # Genre.
-    input_props.append((tf.bool, [])) # Is training.
-    input_props.append((tf.int32, [None])) # Gold starts.
-    input_props.append((tf.int32, [None])) # Gold ends.
-    input_props.append((tf.int32, [None])) # Cluster ids.
+    input_props.append((tf.float32, [None, None, self.embedding_size], 'Text-embeddings'))
+    input_props.append((tf.int32, [None, None, None], 'Character-indices'))
+    input_props.append((tf.int32, [None], 'Text-lengths'))
+    input_props.append((tf.int32, [None], 'Speaker-IDs')) 
+    input_props.append((tf.int32, [], 'Genre'))
+    input_props.append((tf.bool, [], 'Is-training'))
+    input_props.append((tf.int32, [None], 'Gold-starts'))    
+    input_props.append((tf.int32, [None], 'Gold-ends'))
+    input_props.append((tf.int32, [None], 'Cluster-ids'))
 
-    self.queue_input_tensors = [tf.placeholder(dtype, shape) for dtype, shape in input_props]
-    dtypes, shapes = zip(*input_props)
+    self.queue_input_tensors = [tf.placeholder(dtype, shape, name=name) for dtype, shape, name in input_props]
+    dtypes, shapes, names = zip(*input_props)
     queue = tf.PaddingFIFOQueue(capacity=10, dtypes=dtypes, shapes=shapes)
     self.enqueue_op = queue.enqueue(self.queue_input_tensors)
     self.input_tensors = queue.dequeue()
@@ -175,11 +175,20 @@ class CorefModel(object):
     flattened_sentence_indices = self.flatten_emb_by_sentence(sentence_indices, text_len_mask) # [num_words]
     flattened_text_emb = self.flatten_emb_by_sentence(text_emb, text_len_mask) # [num_words]
 
-    candidate_starts, candidate_ends = coref_ops.spans(
-      sentence_indices=flattened_sentence_indices,
-      max_width=self.max_mention_width)
-    candidate_starts.set_shape([None])
-    candidate_ends.set_shape([None])
+    if self.config.get('use_gold_spans', False):
+        candidate_starts, candidate_ends = gold_starts, gold_ends
+        
+        candidate_starts0, candidate_ends0 = coref_ops.spans(
+          sentence_indices=flattened_sentence_indices,
+          max_width=self.max_mention_width)
+        candidate_starts0.set_shape([None])
+        candidate_ends0.set_shape([None])
+    else:
+        candidate_starts, candidate_ends = coref_ops.spans(
+          sentence_indices=flattened_sentence_indices,
+          max_width=self.max_mention_width)
+        candidate_starts.set_shape([None])
+        candidate_ends.set_shape([None])
 
     candidate_mention_emb = self.get_mention_emb(flattened_text_emb, text_outputs, candidate_starts, candidate_ends) # [num_candidates, emb]
     candidate_mention_scores =  self.get_mention_scores(candidate_mention_emb) # [num_mentions, 1]
@@ -189,10 +198,15 @@ class CorefModel(object):
     predicted_mention_indices = coref_ops.extract_mentions(candidate_mention_scores, candidate_starts, candidate_ends, k) # ([k], [k])
     predicted_mention_indices.set_shape([None])
 
-    mention_starts = tf.gather(candidate_starts, predicted_mention_indices) # [num_mentions]
-    mention_ends = tf.gather(candidate_ends, predicted_mention_indices) # [num_mentions]
-    mention_emb = tf.gather(candidate_mention_emb, predicted_mention_indices) # [num_mentions, emb]
-    mention_scores = tf.gather(candidate_mention_scores, predicted_mention_indices) # [num_mentions]
+    if self.config.get('use_gold_spans', False):
+        mention_starts, mention_ends = candidate_starts, candidate_ends
+        mention_emb = candidate_mention_emb
+        mention_scores = candidate_mention_scores
+    else:
+        mention_starts = tf.gather(candidate_starts, predicted_mention_indices) # [num_mentions]
+        mention_ends = tf.gather(candidate_ends, predicted_mention_indices) # [num_mentions]
+        mention_emb = tf.gather(candidate_mention_emb, predicted_mention_indices) # [num_mentions, emb]
+        mention_scores = tf.gather(candidate_mention_scores, predicted_mention_indices) # [num_mentions]
 
     mention_start_emb = tf.gather(text_outputs, mention_starts) # [num_mentions, emb]
     mention_end_emb = tf.gather(text_outputs, mention_ends) # [num_mentions, emb]

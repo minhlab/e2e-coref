@@ -77,16 +77,18 @@ def handle_line(line, document_state):
     document_state.assert_empty()
     document_state.doc_key = conll.get_doc_key(begin_document_match.group(1), begin_document_match.group(2))
     return None
-  elif line.startswith("#end document"):
-    document_state.assert_finalizable()
-    return document_state.finalize()
   else:
     row = line.split()
-    if len(row) == 0:
+    if len(row) == 0 or line.startswith("#end document"):
       document_state.sentences.append(tuple(document_state.text))
       del document_state.text[:]
       document_state.speakers.append(tuple(document_state.text_speakers))
       del document_state.text_speakers[:]
+
+      if line.startswith("#end document"):
+        document_state.assert_finalizable()
+        return document_state.finalize()
+    
       return None
     assert len(row) >= 12
 
@@ -119,6 +121,9 @@ def handle_line(line, document_state):
 def minimize_partition(name, language, extension):
   input_path = "{}.{}.{}".format(name, language, extension)
   output_path = "{}.{}.jsonlines".format(name, language)
+  minimize_file(input_path, output_path)
+  
+def minimize_file(input_path, output_path):
   count = 0
   print "Minimizing {}".format(input_path)
   with open(input_path, "r") as input_file:
@@ -139,4 +144,7 @@ def minimize_language(language):
   minimize_partition("test", language, "v4_gold_conll")
 
 if __name__ == "__main__":
-  minimize_language("english")
+  if len(sys.argv) == 3:
+    minimize_file(sys.argv[1], sys.argv[2])
+  else:
+    minimize_language("english")
